@@ -1,9 +1,8 @@
-library(readxl)
 library(ggplot2)
 
 
 plot_outcome_eGFR <- function(sheet_name) {
-  df <- read_excel("ml_sensitivity.xlsx", sheet = sheet_name)
+  df <- read_excel("ml_MSE.xlsx", sheet = sheet_name)
   month_order <- c(
     "eGFR_CKD_EPI_1M",
     "eGFR_CKD_EPI_3M",
@@ -34,7 +33,7 @@ plot_outcome_eGFR("XGBoost")
 
 #I think the dashboard already plots this, but I just did it to learn LOL
 plot_outcome_DGF <- function(sheet_name) {
-  df <- read_excel("ml_sensitivity.xlsx", sheet = sheet_name)
+  df <- read_excel("ml_MSE.xlsx", sheet = sheet_name)
   model_order <- c(
     "Elastic Net",
     "Lasso",
