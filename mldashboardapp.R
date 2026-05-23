@@ -44,6 +44,24 @@ DATA_PATH <- "Reduced_Features_NO_COLOR 2.csv"
 MRMR_EGFR_PATH <- "top100_features_eGFR_all_outcomes.csv"
 MRMR_DGF_PATH <- "top100_features_DGF.csv"
 
+# Variables unavailable for Non-TX donors — must never enter MRMR predictor sets
+blocked_non_tx_vars <- c(
+  "Number_of_Sections_Per_Slide",
+  "Pre_transplant_Renal_Replacement_Therapy",
+  "Pretransplant_time_on_Renal_Replacement_Therapy_months",
+  "Imunossupression_code",
+  "Antibody_induction_therapy",
+  "HLA_A_mismatches",
+  "HLA_B_mismatches",
+  "HLA_DR_mismatches",
+  "Total_HLA_mismatches",
+  "PRA_Panel_Reactive_Antibodies",
+  "Cold_Ischemia_hours",
+  "Cause_of_death",
+  "Biopsy_type_Allocation_0_Preimplantation_1",
+  "Kidney_used",
+  "CKD_etiology_code")
+
 ml_model_names <- c(
   "Lasso",
   "Ridge",
@@ -168,6 +186,7 @@ read_mrmr_features <- function(path, outcome_name, data_names, top_n = 100) {
   feats <- feats[!is.na(feats)]
   feats <- feats[!(feats %in% c("outcome", outcome_name, DGF_col, eGFR_outcomes))]
   feats <- feats[!is_leakage_or_recipient_feature(feats)]
+  feats <- feats[!(feats %in% blocked_non_tx_vars)]
   feats <- feats[feats %in% data_names]
   unique(head(feats, top_n))}
 
@@ -245,37 +264,37 @@ fit_ml_core <- function(x, x_df, y, model_name, outcome_type) {
         standardize = TRUE)
       
       list(type = "glmnet", model = cvfit, x_cols = colnames(x))} else if (model_name == "Random Forest") {
-      train_df <- data.frame(y = y, x_df, check.names = FALSE)
-      
-      if (outcome_type == "Binary") {
-        train_df$y <- factor(train_df$y, levels = c(0, 1))
-        rf <- ranger::ranger(
-          y ~ .,
-          data = train_df,
-          probability = TRUE,
-          num.trees = 500
-        )} else {
-        rf <- ranger::ranger(
-          y ~ .,
-          data = train_df,
-          num.trees = 500)}
-      
-      list(type = "ranger", model = rf, predictors = names(x_df), outcome_type = outcome_type)} else if (model_name == "XGBoost") {
-      objective <- ifelse(outcome_type == "Binary", "binary:logistic", "reg:squarederror")
-      
-      xgb <- xgboost::xgboost(
-        data = x,
-        label = y,
-        objective = objective,
-        nrounds = 100,
-        max_depth = 3,
-        eta = 0.05,
-        subsample = 0.8,
-        colsample_bytree = 0.8,
-        verbose = 0)
-      
-      list(type = "xgboost", model = xgb, x_cols = colnames(x))} else {
-      NULL}}, error = function(e) NULL)}
+        train_df <- data.frame(y = y, x_df, check.names = FALSE)
+        
+        if (outcome_type == "Binary") {
+          train_df$y <- factor(train_df$y, levels = c(0, 1))
+          rf <- ranger::ranger(
+            y ~ .,
+            data = train_df,
+            probability = TRUE,
+            num.trees = 500
+          )} else {
+            rf <- ranger::ranger(
+              y ~ .,
+              data = train_df,
+              num.trees = 500)}
+        
+        list(type = "ranger", model = rf, predictors = names(x_df), outcome_type = outcome_type)} else if (model_name == "XGBoost") {
+          objective <- ifelse(outcome_type == "Binary", "binary:logistic", "reg:squarederror")
+          
+          xgb <- xgboost::xgboost(
+            data = x,
+            label = y,
+            objective = objective,
+            nrounds = 100,
+            max_depth = 3,
+            eta = 0.05,
+            subsample = 0.8,
+            colsample_bytree = 0.8,
+            verbose = 0)
+          
+          list(type = "xgboost", model = xgb, x_cols = colnames(x))} else {
+            NULL}}, error = function(e) NULL)}
 
 predict_ml_core <- function(fit_obj, x, x_df, outcome_type) {
   tryCatch({
@@ -306,7 +325,7 @@ make_cv_folds <- function(y, k = 5, seed = 123) {
       folds[idx] <- sample(rep(seq_len(k), length.out = length(idx)))
     }
     folds} else {
-    sample(rep(seq_len(k), length.out = n))}}
+      sample(rep(seq_len(k), length.out = n))}}
 
 fit_ml_model <- function(dat, outcome, predictors, predictor_set, model_name, outcome_type) {
   ml_dat <- prepare_ml_data(dat, outcome, predictors, outcome_type)
@@ -351,7 +370,7 @@ fit_ml_model <- function(dat, outcome, predictors, predictor_set, model_name, ou
       if (length(extra_cols) > 0) {
         x_test <- x_test[, !(colnames(x_test) %in% extra_cols), drop = FALSE]}
       x_test <- x_test[, fit_fold$x_cols, drop = FALSE]} else {
-      x_test <- x[test_idx, , drop = FALSE]}
+        x_test <- x[test_idx, , drop = FALSE]}
     
     cv_pred[test_idx] <- predict_ml_core(
       fit_obj = fit_fold,
@@ -366,9 +385,9 @@ fit_ml_model <- function(dat, outcome, predictors, predictor_set, model_name, ou
     mse <- mean((y[keep_pred] - cv_pred[keep_pred])^2, na.rm = TRUE)
     auc <- NA_real_
     score <- mse} else {
-    mse <- NA_real_
-    auc <- calc_auc_safe(y[keep_pred], cv_pred[keep_pred])
-    score <- auc}
+      mse <- NA_real_
+      auc <- calc_auc_safe(y[keep_pred], cv_pred[keep_pred])
+      score <- auc}
   
   # Final refit on all available complete TX rows for prediction/recommendation
   final_fit <- fit_ml_core(
@@ -499,6 +518,10 @@ ui <- fluidPage(
         "ML predictor set",
         choices = ml_predictor_set_names,
         selected = "Joint MRMR-selected donor clinical + image features"),
+      sliderInput(
+        "mrmr_top_n",
+        "Max MRMR-selected features (Joint set only)",
+        min = 1, max = 100, value = 100, step = 1),
       actionButton("run_ml", "Run / Refresh ML models"),
       
       hr(),
@@ -844,9 +867,9 @@ server <- function(input, output, session) {
       mods <- egfr_models_all_tx()
       source_dat <- tx
       label <- "Transplant (Observed)"} else {
-      mods <- egfr_models_train_split()
-      source_dat <- non_tx
-      label <- "Non-Transplant (Prediction only)"}
+        mods <- egfr_models_train_split()
+        source_dat <- non_tx
+        label <- "Non-Transplant (Prediction only)"}
     
     if (length(mods) == 0) return(NULL)
     
@@ -953,19 +976,19 @@ server <- function(input, output, session) {
           Predicted_CKD_Stage = ckd_stage(pred),
           True_eGFR = true,
           True_CKD_Stage = ckd_stage(true))} else {
-        ints <- predict_with_intervals(obj$fit, rec_pred_base)
-        
-        tibble(
-          Recipient_code = as.character(rec$Recipient_code),
-          Outcome = outcome,
-          Predicted_eGFR = ints$Predicted_eGFR,
-          Pred_CI_L = ints$Pred_CI_L,
-          Pred_CI_U = ints$Pred_CI_U,
-          Pred_PI_L = ints$Pred_PI_L,
-          Pred_PI_U = ints$Pred_PI_U,
-          Predicted_CKD_Stage = ckd_stage(ints$Predicted_eGFR),
-          True_eGFR = true,
-          True_CKD_Stage = ckd_stage(true) )}})
+            ints <- predict_with_intervals(obj$fit, rec_pred_base)
+            
+            tibble(
+              Recipient_code = as.character(rec$Recipient_code),
+              Outcome = outcome,
+              Predicted_eGFR = ints$Predicted_eGFR,
+              Pred_CI_L = ints$Pred_CI_L,
+              Pred_CI_U = ints$Pred_CI_U,
+              Pred_PI_L = ints$Pred_PI_L,
+              Pred_PI_U = ints$Pred_PI_U,
+              Predicted_CKD_Stage = ckd_stage(ints$Predicted_eGFR),
+              True_eGFR = true,
+              True_CKD_Stage = ckd_stage(true) )}})
     
     bind_rows(rows)}, digits = 2)
   
@@ -1025,17 +1048,17 @@ server <- function(input, output, session) {
           Predicted_CKD_Stage = ckd_stage(pred),
           Ground_Truth_Available = "No")} 
       else {ints <- predict_with_intervals(obj$fit, rec_pred_base)
-        
-        tibble(
-          NonTX_ID = as.character(rec[[id_col]]),
-          Outcome = outcome,
-          Predicted_eGFR = ints$Predicted_eGFR,
-          Pred_CI_L = ints$Pred_CI_L,
-          Pred_CI_U = ints$Pred_CI_U,
-          Pred_PI_L = ints$Pred_PI_L,
-          Pred_PI_U = ints$Pred_PI_U,
-          Predicted_CKD_Stage = ckd_stage(ints$Predicted_eGFR),
-          Ground_Truth_Available = "No")}})
+      
+      tibble(
+        NonTX_ID = as.character(rec[[id_col]]),
+        Outcome = outcome,
+        Predicted_eGFR = ints$Predicted_eGFR,
+        Pred_CI_L = ints$Pred_CI_L,
+        Pred_CI_U = ints$Pred_CI_U,
+        Pred_PI_L = ints$Pred_PI_L,
+        Pred_PI_U = ints$Pred_PI_U,
+        Predicted_CKD_Stage = ckd_stage(ints$Predicted_eGFR),
+        Ground_Truth_Available = "No")}})
     
     bind_rows(rows)}, digits = 2)
   
@@ -1048,7 +1071,7 @@ server <- function(input, output, session) {
       tags$p(
         style = "color:#b00;",
         "Select a single outcome, such as eGFR_CKD_EPI_6M, to view Predicted vs True.")} else {
-      NULL }})
+          NULL }})
   
   output$pred_true_plot <- renderPlot({
     sel <- input$outcome_view
@@ -1263,7 +1286,7 @@ server <- function(input, output, session) {
         pred_sets <- ml_predictor_sets_for_outcome(
           data_names = names(tx),
           outcome_name = outcome,
-          top_n = 100)
+          top_n = input$mrmr_top_n)
         
         for (set_name in names(pred_sets)) {
           predictors <- pred_sets[[set_name]]
@@ -1341,15 +1364,15 @@ server <- function(input, output, session) {
           y = "MSE") +
         theme_bw() +
         theme(axis.text.x = element_text(angle = 45, hjust = 1))} else {
-      ggplot(dd, aes(x = Model, y = AUC)) +
-        geom_col() +
-        labs(
-          title = paste("ML model comparison for", input$ml_selected_outcome),
-          subtitle = paste(input$ml_selected_predictor_set, "— higher cross-validated AUC is better"),
-          x = "Model",
-          y = "AUC") +
-        theme_bw() +
-        theme(axis.text.x = element_text(angle = 45, hjust = 1))}})
+          ggplot(dd, aes(x = Model, y = AUC)) +
+            geom_col() +
+            labs(
+              title = paste("ML model comparison for", input$ml_selected_outcome),
+              subtitle = paste(input$ml_selected_predictor_set, "— higher cross-validated AUC is better"),
+              x = "Model",
+              y = "AUC") +
+            theme_bw() +
+            theme(axis.text.x = element_text(angle = 45, hjust = 1))}})
   
   output$ml_best_table <- renderTable({
     ml_best() %>%
